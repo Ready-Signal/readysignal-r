@@ -36,12 +36,24 @@ list_signals <- function(token) {
 #'
 #' @param token User access token
 #' @param signal_id Signal ID
+#' @param optimized Optional parameter for optimized signal details
 #' @return A data.frame containing the details for a given signal
 #' @export
-get_signal_details <- function(token, signal_id) {
+get_signal_details <- function(token, signal_id, optimized = NULL) {
   auth <- build_auth(token)
   url <- sprintf("%s/signals/%s", api_base, signal_id)
-  resp <- httr::GET(url, httr::add_headers(Authorization = auth))
+  
+  # Build query parameters
+  query_params <- list()
+  if (!is.null(optimized)) {
+    query_params$optimized <- optimized
+  }
+  
+  resp <- httr::GET(
+    url, 
+    httr::add_headers(Authorization = auth),
+    query = if (length(query_params) > 0) query_params else NULL
+  )
 
   json <- jsonlite::fromJSON(
     httr::content(resp, "text", encoding = "UTF8")
@@ -59,12 +71,33 @@ get_signal_details <- function(token, signal_id) {
 #' @param token User access token
 #' @param signal_id Signal ID
 #' @param infer_types Whether to infer column data types (defaults to TRUE)
+#' @param optimized Optional parameter for optimized signal output
+#' @param startDate Optional start date filter (YYYY-MM-DD format)
+#' @param endDate Optional end date filter (YYYY-MM-DD format)
+#' @param useTargetVariableDates Optional parameter to use target variable dates
 #' @return A data.frame containing the data for a signal
 #' @importFrom utils type.convert
 #' @export
-get_signal <- function(token, signal_id, infer_types = TRUE) {
+get_signal <- function(token, signal_id, infer_types = TRUE, optimized = NULL, startDate = NULL, endDate = NULL, useTargetVariableDates = NULL) {
   auth <- build_auth(token)
-  url <- sprintf("%s/signals/%s/output?page=1", api_base, signal_id)
+  
+  # Build query parameters
+  query_params <- list(page = 1)
+  if (!is.null(optimized)) {
+    query_params$optimized <- optimized
+  }
+  if (!is.null(startDate)) {
+    query_params$startDate <- startDate
+  }
+  if (!is.null(endDate)) {
+    query_params$endDate <- endDate
+  }
+  if (!is.null(useTargetVariableDates)) {
+    query_params$useTargetVariableDates <- useTargetVariableDates
+  }
+  
+  url <- sprintf("%s/signals/%s/output", api_base, signal_id)
+  url <- httr::modify_url(url, query = query_params)
   sesh <- rvest::session(url, httr::add_headers(Authorization = auth))
 
   json <- jsonlite::fromJSON(
@@ -89,12 +122,12 @@ get_signal <- function(token, signal_id, infer_types = TRUE) {
   }
 
   while (json$current_page < json$last_page) {
-
-    url <- sprintf(
-      "https://app.readysignal.com/api/signals/%s/output?page=%d",
-      signal_id,
-      json$current_page + 1
-    )
+    # Add page parameter to existing params (R uses copy-on-modify, equivalent to Python's .copy())
+    page_params <- query_params
+    page_params$page <- json$current_page + 1
+    
+    url <- sprintf("%s/signals/%s/output", api_base, signal_id)
+    url <- httr::modify_url(url, query = page_params)
     sesh <- rvest::session_jump_to(sesh, url)
 
     while (sesh$response$status != 200) {
@@ -167,9 +200,12 @@ signal_to_csv <- function(token, signal_id, file_name) {
 #' Not to be used with `filename`
 #' @param create_custom_features Flag for custom feature creation. 0 or 1, defaults to 1
 #' @param callback_url Callback URL for notifications
+#' @param filtered_geo_grains Optional parameter to filter geographic grains: "usa", "nonusa", or "all"
+#' @param signal_name Optional parameter to specify a custom name for the signal (max 255 characters).
+#' If not provided, the signal name will default to 'Auto-discovery - [custom feature name]'
 #' @return HTTP response
 #' @export
-auto_discover <- function(token, geo_grain, date_grain, filename = NULL, df = NULL, create_custom_features = 1, callback_url = NULL) {
+auto_discover <- function(token, geo_grain, date_grain, filename = NULL, df = NULL, create_custom_features = 1, callback_url = NULL, filtered_geo_grains = NULL, signal_name = NULL) {
   auth <- build_auth(token)
 
   if (!geo_grain %in% c("State", "Country")) {
@@ -183,6 +219,10 @@ auto_discover <- function(token, geo_grain, date_grain, filename = NULL, df = NU
   if (!create_custom_features %in% c(0, 1)) {
     stop("`create_custom_features` must by 0 or 1")
   }
+  
+  if (!is.null(filtered_geo_grains) && !filtered_geo_grains %in% c("usa", "nonusa", "all")) {
+    stop("`filtered_geo_grains` must be \"usa\", \"nonusa\", or \"all\"")
+  }
 
   if (is.null(callback_url)) {
     callback_url <- ""
@@ -190,15 +230,22 @@ auto_discover <- function(token, geo_grain, date_grain, filename = NULL, df = NU
 
   if (!is.null(filename)) {
     url <- sprintf("%s/auto-discovery/file", api_base)
+    body_list <- list(
+      callback_url = callback_url,
+      create_custom_features = create_custom_features,
+      geo_grain = geo_grain,
+      date_grain = date_grain,
+      file = httr::upload_file(filename)
+    )
+    if (!is.null(filtered_geo_grains)) {
+      body_list$filtered_geo_grains <- filtered_geo_grains
+    }
+    if (!is.null(signal_name)) {
+      body_list$signal_name <- signal_name
+    }
     resp <- httr::POST(
       url,
-      body = list(
-        callback_url = callback_url,
-        create_custom_features = create_custom_features,
-        geo_grain = geo_grain,
-        date_grain = date_grain,
-        file = httr::upload_file(filename)
-      ),
+      body = body_list,
       httr::add_headers(Authorization = auth)
     )
   } else if (!is.null(df)) {
@@ -210,6 +257,12 @@ auto_discover <- function(token, geo_grain, date_grain, filename = NULL, df = NU
       date_grain = date_grain,
       data = df
     )
+    if (!is.null(filtered_geo_grains)) {
+      body$filtered_geo_grains <- filtered_geo_grains
+    }
+    if (!is.null(signal_name)) {
+      body$signal_name <- signal_name
+    }
     body <- jsonlite::toJSON(body, auto_unbox = TRUE)
     body <- as.character(body)    
     resp <- httr::POST(
