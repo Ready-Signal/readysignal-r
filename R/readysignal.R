@@ -100,6 +100,14 @@ get_signal <- function(token, signal_id, infer_types = TRUE, optimized = NULL, s
   url <- httr::modify_url(url, query = query_params)
   sesh <- rvest::session(url, httr::add_headers(Authorization = auth))
 
+  # Check HTTP status before parsing JSON
+  if (sesh$response$status != 200) {
+    stop(sprintf(
+      "Connection to Ready Signal failed with status %d. Check that your access token is up-to-date and signal ID is valid.",
+      sesh$response$status
+    ))
+  }
+
   json <- jsonlite::fromJSON(
     httr::content(sesh$response, "text", encoding = "UTF8")
   )
