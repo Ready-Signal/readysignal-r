@@ -155,18 +155,22 @@ get_signal <- function(token, signal_id, infer_types = TRUE, optimized = NULL, s
 
   if (infer_types) {
     for (i in seq_len(ncol(data))) {
-      tryCatch(
-        {
-          data[[i]] <- as.Date(data[[i]])
+      # Only character columns are date candidates. We must NOT attempt
+      # as.Date() on numeric/integer columns: as of R 4.3.0, as.Date.numeric()
+      # defaults `origin` to "1970-01-01" instead of erroring, so a value like
+      # 7 silently becomes "1970-01-08". That would turn every numeric metric
+      # into a bogus date.
+      if (is.character(data[[i]])) {
+        converted <- suppressWarnings(as.Date(data[[i]], format = "%Y-%m-%d"))
+        if (!all(is.na(converted))) {
+          data[[i]] <- converted
           next
-        },
-        warning = function(e) {},
-        error = function(e) {}
-      )
+        }
+      }
 
       tryCatch(
         {
-          data[[i]] <- type.convert(data[[i]])
+          data[[i]] <- type.convert(data[[i]], as.is = TRUE)
         },
         warning = function(e) {},
         error = function(e) {}
