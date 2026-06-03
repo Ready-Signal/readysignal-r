@@ -1,6 +1,6 @@
 Package: readysignal
 Title: 'Ready Signal' API Wrapper
-Version: 0.0.10
+Version: 0.0.11
 Authors@R: 
     person(
         given = "Davis",
